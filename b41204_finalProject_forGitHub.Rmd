@@ -1,0 +1,1295 @@
+---
+title: "Exploring Project"
+author: MengCheng Chung
+date: "Last Updated: 03/10/2021"
+output:
+  pdf_document:
+    toc: yes
+    keep_md: true
+  html_document:
+    df_print: paged
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+
+
+# Pre-Processing 
+
+
+```{r include = FALSE}
+
+## LOAD PACKAGES
+
+library(tidyverse)
+
+
+```
+
+```{r}
+
+## CREATE FUNCTIONS -------
+
+
+# to fix NAs
+fixNAs <-function(data_frame){
+  # Define reactions to NAs
+  integer_reac <- 0
+  factor_reac <- "FIXED_NA"
+  character_reac <- "FIXED_NA"
+  date_reac <-as.Date("1900-01-01")
+  
+  # Loop through columns in the data frame
+  # and depending on which class the# variable is, apply the defined reaction and
+  # create a surrogate
+  
+  for(i in 1:ncol(data_frame)) {
+    if(class(data_frame[,i]) %in% c("numeric","integer")) {
+      if(any(is.na(data_frame[,i]))) {
+        data_frame[,paste0(colnames(data_frame)[i],"_surrogate")] <-
+          as.factor(ifelse(is.na(data_frame[,i]),"1","0"))
+        data_frame[is.na(data_frame[,i]), i] <- integer_reac}
+    }
+    else
+      if(class(data_frame[,i]) %in% c("factor")) {
+        if(any(is.na(data_frame[,i]))){
+          data_frame[,i]<-as.character(data_frame[,i])
+          data_frame[,paste0(colnames(data_frame)[i],"_surrogate")] <-
+            as.factor(ifelse(is.na(data_frame[,i]),"1","0"))
+          data_frame[is.na(data_frame[,i]),i]<-factor_reac
+          data_frame[,i]<-as.factor(data_frame[,i])}}
+    else{
+      if(class(data_frame[,i]) %in% c("character")) {
+        if(any(is.na(data_frame[,i]))){
+          data_frame[,paste0(colnames(data_frame)[i],"_surrogate")]<-
+            as.factor(ifelse(is.na(data_frame[,i]),"1","0"))
+          data_frame[is.na(data_frame[,i]),i]<-character_reac
+        }
+      }
+      else{
+        if(class(data_frame[,i]) %in% c("Date")) {
+          if(any(is.na(data_frame[,i]))){
+            data_frame[,paste0(colnames(data_frame)[i],"_surrogate")]<-
+              as.factor(ifelse(is.na(data_frame[,i]),"1","0"))
+            data_frame[is.na(data_frame[,i]),i]<-date_reac
+          }
+        }
+      }
+    }
+  }
+  return(data_frame)
+}
+```
+
+
+```{r}
+
+# Load Data from .dta file
+mydata <- haven::read_dta("Data/UCT_FINAL_CLEAN.dta")
+
+# Labels for each variable is stored here for reference
+data_labels = lapply(mydata, attr, "label")
+
+# Save csv file for sharing
+# write_csv(mydata, "../Data/UCT_FINAL_CLEAN.csv")
+```
+
+```{r}
+# Clean data
+data.clean = mydata %>%
+  mutate(
+    # Collapse dummy variables into single categorical variable for prediction
+    trt_fct = if_else(treat == 1, "Treatment", 
+                      if_else(spillover == 1, "Spillover",
+                              if_else(purecontrol == 1, "PureControl", "cond.NA")))
+  ) %>%
+  select(
+    trt_fct,
+    everything(),
+    -surveyid,                 # household identifier
+    -treat,                    # condition dummy
+    -spillover,                # condition dummy
+    -purecontrol,              # condition dummy
+    -control_village,          # condition dummy (village level)
+    -village,                  # village dummy
+    -contains("treat"),        # condition dummy (crossed w/ indiv traits)
+    -contains("purecontrol"),  # condition dummy (crossed w/ indiv traits)
+    -contains("spillover"),    # condition dummy (crossed w/ indiv traits)
+    -contains("date"),         # reveals date of transfer for treated
+    -contains("Dbase"),        # months elapsed since transfer
+    -Dfirstlast,               # months elapsed since transfer
+    -Dfirstend,                # months elapsed since transfer
+    -Dmeanend,                 # months elapsed since transfer
+    -Dmedend,                  # months elapsed since transfer
+    -Dlastend                  # months elapsed since transfer
+  ) %>%
+  mutate(
+    trt_fct = factor(trt_fct)
+  )
+  # mutate_at(
+  #   c("trt_fct"),
+  #   as.factor
+  # )
+
+# fix NAs
+  # NOTE: need to convert to data.frame to use fixNAs function
+# data.clean <- fixNAs(as.data.frame(data.clean)) %>%
+#   dplyr::as_tibble()
+
+# check missing data
+any(sapply(data.clean, function(x) sum(is.na(x))) > 0)
+```
+
+
+```{r}
+## Separate dataset for "slim" - applying some domain knowledge
+data.slim = data.clean %>%
+  select(
+    trt_fct,
+    contains("index"),               # These appear to contain generated indices
+    contains("total"),               # These appear to contain totals, eg revenue, item values
+    dplyr::starts_with("b_"),        # These appear to be related to individual demographics, eg weight
+    dplyr::starts_with("hh_"),       # These appear to be related to household traits
+    -contains("b_m"),                # These appear to contain indiv psych variables, eg rosenberg item 1
+    -contains("b_f"),                # These appear to contain indiv psych variables, eg rosenberg item 1
+    -contains("ppp0"),               # These appear to be baseline values, we assume these are balanced at baseline and not likely to affect treatment assignment
+    -contains("full0"),              # These appear to replicate _ppp0, maybe involves imputed values?
+    -contains("miss0")               # These appear to be a dummy 
+  )
+
+
+# check missing data
+any(sapply(data.slim, function(x) sum(is.na(x))) > 0)
+
+data.slim = fixNAs(as.data.frame(data.slim)) %>%
+  dplyr::as_tibble()
+
+df.labels.slim = lapply(data.slim, attr, "label")
+
+
+
+# Keep wide dataset 
+data.wide = data.clean
+data.wide = fixNAs(as.data.frame(data.wide)) %>%
+  dplyr::as_tibble()
+df.labels.wide = lapply(data.wide, attr, "label")
+
+```
+
+```{r, message = FALSE}
+# Split data into training and test for Slim Data
+
+library(caret)
+set.seed(101)
+ind1 = caret::createDataPartition(
+  data.slim$trt_fct, p=0.80, list=FALSE
+  )
+
+data.slim <- data.slim %>%
+  mutate_if(is.numeric, ~(scale(.) %>% as.vector))
+
+train.df.s = data.slim[as.vector(ind1),]
+
+cat("Train")
+table(train.df.s$trt_fct)
+
+train.df.s <- train.df.s %>%
+  select(trt_fct, everything())
+  
+
+
+
+test.df.s = data.slim[-as.vector(ind1),]
+cat("Test")
+table(test.df.s$trt_fct)
+test.df.s <- test.df.s %>%
+  select(trt_fct, everything())
+
+```
+
+```{r, message = FALSE}
+# Split data into training and test for Wide Data
+
+library(caret)
+set.seed(101)
+ind1 = caret::createDataPartition(
+  data.wide$trt_fct, p=0.80, list=FALSE
+  )
+
+train.df.w = data.wide[as.vector(ind1),]
+
+cat("Train")
+table(train.df.w$trt_fct)
+
+train.df.w <- train.df.w %>%
+  select(trt_fct, everything())
+
+
+
+test.df.w = data.wide[-as.vector(ind1),]
+cat("Test")
+table(test.df.w$trt_fct)
+test.df.w <- test.df.w %>%
+  select(trt_fct, everything())
+
+```
+
+```{r}
+# Model1: logistic with relaxed lasso
+library(glmnet)
+set.seed(101)
+x = data.matrix(train.df.s[,-1])
+y = train.df.s$trt_fct
+relaxed_lasso.s <- cv.glmnet(x, y, family = "multinomial", type.multinomial = "grouped", relax = TRUE, nfolds = 5)
+newx = data.matrix(test.df.s[,-1])
+probability_relaxed_lasso.s <- predict(relaxed_lasso.s, newx, s = "lambda.min",
+                                       type = "class")
+mean(probability_relaxed_lasso.s == test.df.s$trt_fct) #0.7704348
+
+coefs <- coef(relaxed_lasso.s, s="lambda.min")
+names(which(coefs$Treatment[,1]!=0))
+# coefs <- coef(relaxed_lasso.s, s='lambda.min')
+coefs <- as.data.frame(coefs$Treatment[,1])
+names(coefs) <- c('val')
+
+coefs %>%
+  arrange(-abs(val)) %>%
+  print(.,n=25)
+```
+
+```{r}
+library(ranger)
+library(ggplot2)
+set.seed(101)
+
+######Random Forest
+hyper_grid <- expand.grid(
+  mtry       = seq(2, 7, by = 1),
+  node_size  = c(5, 10, 25, 50, 100, 150, 200),
+  sample_size = c(.55, .632, .70, .80),
+  OOB_ERROR   = 0
+)
+
+for(i in 1:nrow(hyper_grid)) {
+  # train model
+  model <- ranger(
+    formula         = trt_fct ~ ., 
+    data            = train.df.s, 
+    num.trees       = 1000,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sample_size[i],
+    importance = 'impurity',
+    classification = TRUE,
+    seed            = 101
+  )
+  
+  # add OOB error to grid
+  hyper_grid$OOB_ERROR[i] <- sqrt(model$prediction.error)
+}
+
+(oo = hyper_grid %>% 
+    dplyr::arrange(OOB_ERROR) %>%
+    head(10))
+
+rf.fit.final <- ranger(
+  formula         = trt_fct ~., 
+  data            = train.df.s, 
+  num.trees       = 1000,
+  mtry            = oo[1,]$mtry,
+  min.node.size   = oo[1,]$node_size,
+  sample.fraction = oo[1,]$sample_size,
+  seed            = 101,
+  importance      = 'impurity',
+  classification = TRUE,
+)
+
+rf.predictions = predict(rf.fit.final, data = test.df.s[,-1])$predictions
+mean(rf.predictions == test.df.s$trt_fct) #0.9426087
+
+rf.var.imp = importance(rf.fit.final)
+df = data.frame(names(rf.var.imp), unname(rf.var.imp), unname(rf.var.imp)/max(rf.var.imp))
+names(df) = c("variable", "impt", "impt_dist")
+imp.final <- df[order(-df$impt_dist),]
+imp.final <- head(imp.final, 25)
+
+imp.plot <- ggplot(data = imp.final, aes(x = impt_dist, y = variable)) +
+  geom_point(colour="dark green", size=1)
+imp.plot
+```
+
+```{r}
+# boosting tree for slim data
+library(xgboost)
+
+y.xgb <- as.numeric(ifelse(y=='Treatment', 0, ifelse(y == 'Spillover', 1, 2)))
+
+# xgb.train = xgb.DMatrix(data=x,label=y.xgb)
+# unique(y.xgb)
+
+hyper_grid_xgb <- expand.grid(
+shrinkage = c(.01, .1), ## controls the learning rate
+interaction.depth = c(1, 2, 4), ## tree depth
+nrounds = c(1000, 5000) ## number of trees
+)
+
+for(i in 1:nrow(hyper_grid_xgb)) {
+# create parameter list
+params <- list(
+eta = hyper_grid_xgb$shrinkage[i],
+max_depth = hyper_grid_xgb$interaction.depth[i]
+)
+
+# reproducibility
+set.seed(101)
+
+# train model
+xgb.model <- xgboost(
+data = x,
+label = y.xgb,
+params = params,
+nrounds = hyper_grid_xgb$nrounds[i],
+objective = "multi:softprob",
+eval_metric = "mlogloss",
+num_class = 3,
+verbose = 0, # silent
+verbosity = 0 # silent
+)
+
+# add min training error and trees to grid
+  hyper_grid_xgb$optimal_trees[i] <- which.min(xgb.model$evaluation_log$train_mlogloss)
+  hyper_grid_xgb$min_loss[i] <- min(xgb.model$evaluation_log$train_mlogloss)
+
+}
+(oo = hyper_grid_xgb %>%
+      dplyr::arrange(min_loss) %>%
+      head(10))
+
+# parameter list
+params <- list(
+  eta = oo[1,]$shrinkage,
+  max_depth = oo[1,]$interaction.depth
+)
+
+# train final model
+xgb.model.final.s <- xgboost(
+  data = x,
+  label = y.xgb,
+  params = params,
+  nrounds = oo[1,]$optimal_trees,
+  objective = "multi:softprob",
+  eval_metric = "mlogloss",
+  num_class = 3,
+  verbose = 0, # silent
+  verbosity = 0 # silent
+)
+
+phat.xgb.s <- predict(xgb.model.final.s, data.matrix(test.df.s[,-1]), reshape = TRUE)
+# which.max tells you which column is most probable
+# we convert them back to 0-2, assuming column 1 corresponds to 0
+phat.xgb.s = apply(phat.xgb.s,1,which.max)-1
+y.test.s <- as.numeric(ifelse(test.df.s$trt_fct=='Treatment', 0, ifelse(test.df.s$trt_fct == 'Spillover', 1, 2)))
+mean(phat.xgb.s == y.test.s) #0.9530435
+
+xgb.var.imp = xgb.importance(model = xgb.model.final.s)
+xgb.plot.importance(importance_matrix = xgb.var.imp)
+```
+
+```{r}
+# boosting tree for wide data
+y.xgb <- as.numeric(ifelse(y=='Treatment', 0, ifelse(y == 'Spillover', 1, 2)))
+
+hyper_grid_xgb <- expand.grid(
+shrinkage = c(.01, .1), ## controls the learning rate
+interaction.depth = c(1, 2, 4), ## tree depth
+nrounds = c(1000, 5000) ## number of trees
+)
+
+for(i in 1:nrow(hyper_grid_xgb)) {
+# create parameter list
+params <- list(
+eta = hyper_grid_xgb$shrinkage[i],
+max_depth = hyper_grid_xgb$interaction.depth[i]
+)
+
+# reproducibility
+set.seed(101)
+
+# train model
+xgb.model <- xgboost(
+data = data.matrix(train.df.w[,-1]),
+label = y.xgb,
+params = params,
+nrounds = hyper_grid_xgb$nrounds[i],
+objective = "multi:softprob",
+eval_metric = "mlogloss",
+num_class = 3,
+verbose = 0, # silent
+verbosity = 0 # silent
+)
+
+# add min training error and trees to grid
+  hyper_grid_xgb$optimal_trees[i] <- which.min(xgb.model$evaluation_log$train_mlogloss)
+  hyper_grid_xgb$min_loss[i] <- min(xgb.model$evaluation_log$train_mlogloss)
+
+}
+(oo = hyper_grid_xgb %>%
+      dplyr::arrange(min_loss) %>%
+      head(10))
+
+# parameter list
+params <- list(
+  eta = oo[1,]$shrinkage,
+  max_depth = oo[1,]$interaction.depth
+)
+
+# train final model
+xgb.model.final.w <- xgboost(
+  data = data.matrix(train.df.w[,-1]),
+  label = y.xgb,
+  params = params,
+  nrounds = oo[1,]$optimal_trees,
+  objective = "multi:softprob",
+  eval_metric = "mlogloss",
+  num_class = 3,
+  verbose = 0, # silent
+  verbosity = 0 # silent
+)
+
+phat.xgb.w <- predict(xgb.model.final.w, data.matrix(test.df.w[,-1]), reshape = TRUE)
+# which.max tells you which column is most probable
+# we convert them back to 0-2, assuming column 1 corresponds to 0
+phat.xgb.w = apply(phat.xgb.w,1,which.max)-1
+# actual = sapply(iris$Species,recode)
+y.test.w <- as.numeric(ifelse(test.df.w$trt_fct=='Treatment', 0, ifelse(test.df.w$trt_fct == 'Spillover', 1, 2)))
+mean(phat.xgb.w == y.test.w) #0.9686957
+
+xgb.var.imp = xgb.importance(model = xgb.model.final.w)
+xgb.plot.importance(importance_matrix = xgb.var.imp)
+```
+
+```{r}
+# SVM
+library(caret)
+library(e1071)
+set.seed(101)
+svm.tuned <- train(
+  trt_fct ~.,
+  data = train.df.s, 
+  method = "svmLinear", 
+  trControl = trainControl(method = "cv", number = 10), 
+  tuneLength = 10)
+
+svm.tuned$finalModel
+yhat.svm1 <- predict(svm.tuned, newdata=test.df.s[,-1])
+# Accuracy on test data
+mean(yhat.svm1 == test.df.s$trt_fct) #0.7547826
+```
+
+```{r}
+set.seed(101)
+svm.tuned2 <- train(
+  trt_fct ~.,
+  data = train.df.s, 
+  method = "svmRadial", 
+  trControl = trainControl(method = "cv", number = 10), 
+  tuneLength = 10)
+
+svm.tuned2$finalModel
+yhat.svm2 <- predict(svm.tuned2, newdata=test.df.s[,-1])
+# Accuracy on test data
+mean(yhat.svm2 == test.df.s$trt_fct) #0.8608696
+```
+
+```{r}
+# NN
+library(h2o)
+h2o.init(nthreads=4, max_mem_size="8G")
+train.h2o <- as.h2o(train.df.s)
+splits <- h2o.splitFrame(train.h2o, c(0.8), seed=1)
+# training data
+train.train.h2o  <- h2o.assign(splits[[1]], "train.hex") 
+# validating data
+train.test.h2o  <- h2o.assign(splits[[2]], "valid.hex") 
+# test data
+test.h2o <- as.h2o(test.df.s)
+predictors = 2:71
+response = 1
+```
+
+```{r}
+if (!file.exists(file.path("NN Models", "dl_grid_random_model_30"))){
+  hyper_params <- list(
+    activation=c("Rectifier","Tanh","RectifierWithDropout","TanhWithDropout"),
+    hidden=list(c(30,30),c(50,50),c(100,100),
+                c(60,60,60),c(100,100,100),
+                c(25,25,25,25),c(64,64,64,64),c(100,100,100,100)),
+    input_dropout_ratio=c(0,0.05),
+    l1=seq(0,1e-4,1e-6),
+    l2=seq(0,1e-4,1e-6),
+    max_w2=c(5,10,15)
+  )
+  
+  ## Stop once the top 5 models are within 1% of each other
+  ## 
+  ##     - the windowed average varies less than 1%
+  ##
+  search_criteria = list(
+    strategy = "RandomDiscrete", 
+    max_runtime_secs = 720, 
+    max_models = 200, 
+    seed=1, 
+    stopping_rounds=5,
+    stopping_tolerance=1e-2
+    )
+  
+  dl_random_grid <- h2o.grid(
+    algorithm="deeplearning",
+    grid_id = "dl_grid_random",
+    training_frame=train.train.h2o,
+    validation_frame=train.test.h2o, 
+    x=predictors, 
+    y=response,
+    epochs=10,
+    distribution = "multinomial",
+    stopping_metric="logloss",
+    stopping_tolerance=1e-2,        ## stop when MSE does not improve by >=1% 
+                                    ## for 2 scoring events
+    stopping_rounds=2,
+    score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
+    hyper_params = hyper_params,
+    search_criteria = search_criteria
+  )         
+  grid <- h2o.getGrid("dl_grid_random", sort_by="logloss", decreasing=FALSE)
+  grid
+  grid@summary_table[1,]
+  best_model <- h2o.getModel(grid@model_ids[[1]]) ## model with lowest logloss
+  h2o.saveModel(best_model, path="NN Models")
+  best_model
+}else
+{
+  best_model <- h2o.loadModel(file.path("NN Models", "dl_grid_random_model_30"))
+}
+h2o.performance(best_model, newdata=test.h2o) #0.7774
+```
+
+Since SVM and NN are sensitive to irrelevant variables, and their performance cannot meet the that of tree-based models, so I implemented variable selection here.
+```{r}
+library(Boruta)
+set.seed(101)
+variable <- Boruta(trt_fct~., data=train.df.s, doTrace=0)
+variable.final <- TentativeRoughFix(variable)
+confirmed <- variable.final$finalDecision[variable.final$finalDecision %in% c("Confirmed")]
+train.imp = train.df.s[,(names(train.df.s) %in% c("trt_fct",names(confirmed)))]
+test.imp = test.df.s[,(names(test.df.s) %in% c("trt_fct",names(confirmed)))]
+```
+
+```{r}
+# SVM
+set.seed(101)
+svm.tuned3 <- train(
+  trt_fct ~.,
+  data = train.imp, 
+  method = "svmLinear", 
+  trControl = trainControl(method = "cv", number = 10), 
+  tuneLength = 10)
+
+svm.tuned3$finalModel
+yhat.svm3 <- predict(svm.tuned3, newdata=test.imp[,-1])
+# Accuracy on test data
+mean(yhat.svm3 == test.imp$trt_fct) #0.7686957
+```
+
+```{r}
+set.seed(101)
+svm.tuned4 <- train(
+  trt_fct ~.,
+  data = train.imp, 
+  method = "svmRadial", 
+  trControl = trainControl(method = "cv", number = 10), 
+  tuneLength = 10)
+
+svm.tuned4$finalModel
+yhat.svm4 <- predict(svm.tuned4, newdata=test.imp[,-1])
+# Accuracy on test data
+mean(yhat.svm4 == test.imp$trt_fct) #0.8852174
+```
+
+```{r}
+# NN
+h2o.init(nthreads=4, max_mem_size="8G")
+train.h2o <- as.h2o(train.imp)
+splits <- h2o.splitFrame(train.h2o, c(0.8), seed=1)
+# training data
+train.train.h2o  <- h2o.assign(splits[[1]], "train.hex") 
+# validating data
+train.test.h2o  <- h2o.assign(splits[[2]], "valid.hex") 
+# test data
+test.h2o <- as.h2o(test.imp)
+predictors = 2:59
+response = 1
+```
+
+```{r}
+if (!file.exists(file.path("NN Models", "dl_grid_random_2_model_154"))){
+  hyper_params <- list(
+    activation=c("Rectifier","Tanh","RectifierWithDropout","TanhWithDropout"),
+    hidden=list(c(30,30),c(50,50),c(100,100),
+                c(60,60,60),c(100,100,100),
+                c(25,25,25,25),c(64,64,64,64),c(100,100,100,100)),
+    input_dropout_ratio=c(0,0.05),
+    l1=seq(0,1e-4,1e-6),
+    l2=seq(0,1e-4,1e-6),
+    max_w2=c(5,10,15)
+  )
+  
+  ## Stop once the top 5 models are within 1% of each other
+  ## 
+  ##     - the windowed average varies less than 1%
+  ##
+  search_criteria = list(
+    strategy = "RandomDiscrete", 
+    max_runtime_secs = 720, 
+    max_models = 200, 
+    seed=1, 
+    stopping_rounds=5,
+    stopping_tolerance=1e-2
+    )
+  
+  dl_random_grid_2 <- h2o.grid(
+    algorithm="deeplearning",
+    grid_id = "dl_grid_random_2",
+    training_frame=train.train.h2o,
+    validation_frame=train.test.h2o, 
+    x=predictors, 
+    y=response,
+    epochs=10,
+    distribution = "multinomial",
+    stopping_metric="logloss",
+    stopping_tolerance=1e-2,        ## stop when MSE does not improve by >=1% 
+                                    ## for 2 scoring events
+    stopping_rounds=2,
+    score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
+    hyper_params = hyper_params,
+    search_criteria = search_criteria
+  )         
+  grid2 <- h2o.getGrid("dl_grid_random_2", sort_by="logloss", decreasing=FALSE)
+  grid2
+  grid2@summary_table[1,]
+  best_model2 <- h2o.getModel(grid2@model_ids[[1]]) ## model with lowest logloss
+  h2o.saveModel(best_model2, path="NN Models")
+  best_model2
+}else
+{
+  best_model <- h2o.loadModel(file.path("NN Models", "dl_grid_random_2_model_154"))
+}
+h2o.performance(best_model2, newdata=test.h2o) #0.7826
+```
+
+```{r}
+# UMAP
+library(umap)
+set.seed(101)
+umap_fit_5 <- data.matrix(data.slim[,-1]) %>% 
+  umap(n_neighbors = 5,
+       metric = "euclidean",
+       n_epochs = 500)
+  
+umap_fit_5 <- data.slim %>% 
+  # mutate_if(.funs = scale, # we don't want to divide sd (for better plot effect)
+  #           .predicate = is.numeric,
+  #           scale = FALSE) %>%
+  mutate(First_Dimension = umap_fit_5$layout[,1],
+         Second_Dimension = umap_fit_5$layout[,2]) %>% 
+  gather(key = "Variable",
+         value = "Value",
+         c(-First_Dimension, -Second_Dimension, -trt_fct))
+
+ggplot(umap_fit_5, aes(First_Dimension, Second_Dimension, 
+                              col = factor(trt_fct))) + 
+  geom_point(alpha = 0.6) +
+  labs(title = " ",
+       subtitle = "Neighborhood size: 5; Epochs = 500",
+       x = "First Dimension",
+       y = "Second Dimension") +
+  theme_minimal()
+
+# epochs = 20 
+set.seed(101)
+umap_fit_e_20 <- data.matrix(data.slim[,-1]) %>% 
+  umap(n_neighbors = 5,
+       metric = "euclidean",
+       n_epochs = 20)
+
+umap_fit_e_20 <- data.slim %>% 
+  # mutate_if(.funs = scale,
+  #           .predicate = is.numeric,
+  #           scale = FALSE) %>% 
+  mutate(First_Dimension = umap_fit_e_20$layout[,1],
+         Second_Dimension = umap_fit_e_20$layout[,2]) %>% 
+  gather(key = "Variable",
+         value = "Value",
+         c(-First_Dimension, -Second_Dimension, -trt_fct))
+
+ggplot(umap_fit_e_20, aes(First_Dimension, Second_Dimension, 
+                                  col = factor(trt_fct))) + 
+  geom_point(alpha = 0.6) +
+  labs(title = " ",
+       subtitle = "Neighborhood size: 5; Epochs = 20",
+       x = "First Dimension",
+       y = "Second Dimension") +
+  theme_minimal()
+```
+
+```{r}
+# SOM
+library(kohonen)
+set.seed(101)
+# create the structure of the output layer
+search_grid <- somgrid(xdim = 10, 
+                       ydim = 10,
+                       topo = "rectangular", # 1 neuron surrounds by 4
+                       neighbourhood.fct = "gaussian") 
+
+# fit
+som_fit <- som(data.matrix(data.slim[,-1]),
+               grid = search_grid,
+               alpha = c(0.1, 0.001), # learning rate
+               radius = 1, # neighbor size, based on Guassian
+               rlen = 1000, # how many times we see the data
+               dist.fcts = "euclidean", 
+               mode = "batch") 
+```
+
+```{r}
+# Mean Distance to Closest Node v.s. Iteration Times
+som_fit$changes %>% 
+  as_tibble() %>% 
+  dplyr::mutate(changes = V1,
+                iteration = seq(1:length(changes))) %>% 
+  ggplot(aes(iteration, changes)) +
+  geom_line() +
+  labs(x = "Training Iteration",
+       y = "Mean Distance to Closest Node") +
+  theme_minimal()
+```
+
+```{r}
+# clustering from SOM via k-means (hard), FCM (soft)
+# for calculating correlations
+point_colors <- c("#d30b0d", "#0033cc", '#6cfa25')
+# (red: PureControl, blue: Spillover, green: Treatment)
+neuron_colors <- c("#428bca", "#d27979", '#FFFFFF')
+
+# plot SOM
+plot(som_fit, 
+     type = "mapping", 
+     pch = 21, 
+     col = point_colors[data.slim$trt_fct], 
+     shape = "straight", main = "SOM Grid")
+```
+
+```{r}
+set.seed(101)
+# k-means
+kmeans_clusters <- som_fit$codes[[1]] %>% 
+  kmeans(., centers = 3)
+
+plot(som_fit, 
+     type = "mapping", 
+     pch = 21, 
+     bg = point_colors[data.slim$trt_fct], 
+     shape = "straight",
+     bgcol = neuron_colors[kmeans_clusters$cluster],
+     main = "3 clusters via k-means");
+add.cluster.boundaries(x = som_fit, 
+                       clustering = kmeans_clusters$cluster, lwd = 5, lty = 5)
+```
+
+```{r}
+set.seed(101)
+# overlapping in kmeans, let's use soft partitioning
+# FCM
+fcm_clusters <- som_fit$codes[[1]] %>% 
+  ppclust::fcm(., centers = 3)
+
+plot(som_fit, 
+     type = "mapping", 
+     pch = 21, 
+     bg = point_colors[data.slim$trt_fct],
+     shape = "straight",
+     bgcol = neuron_colors[fcm_clusters$cluster],
+     main = "3 clusters via FCM");
+add.cluster.boundaries(x = som_fit, 
+                       clustering = fcm_clusters$cluster, lwd = 5, lty = 5)
+```
+
+## data.discover
+```{r}
+## Dropping Hypothesized Outcomes
+
+data.discover = data.clean %>%
+  select(
+    trt_fct,
+    everything(),
+    -contains("index"),               # These appear to contain generated indices
+    # -contains("total"),               # These appear to contain totals, eg revenue, item values
+    -dplyr::ends_with("0")
+    # -contains("ppp0"),               # These appear to be baseline values, we assume these are balanced at baseline and not likely to affect treatment assignment
+    # -contains("full0"),              # These appear to replicate _ppp0, maybe involves imputed values?
+    # -contains("miss0")               # These appear to be a dummy
+  )
+
+# check missing data
+any(sapply(data.discover, function(x) sum(is.na(x))) > 0)
+
+data.discover = fixNAs(as.data.frame(data.discover)) %>%
+  dplyr::as_tibble()
+
+df.labels.discover = lapply(data.discover, attr, "label")
+```
+
+
+```{r, message = FALSE}
+# Split data into training and test for Slim Data
+
+library(caret)
+set.seed(101)
+ind1 = caret::createDataPartition(
+  data.discover$trt_fct, p=0.80, list=FALSE
+  )
+
+data.discover <- data.discover %>%
+  mutate_if(is.numeric, ~(scale(.) %>% as.vector))
+
+train.df.discov = data.discover[as.vector(ind1),]
+
+cat("Train")
+table(train.df.discov$trt_fct)
+
+train.df.discov <- train.df.discov %>%
+  select(trt_fct, everything())
+  
+
+
+
+test.df.disco = data.discover[-as.vector(ind1),]
+cat("Test")
+table(test.df.disco$trt_fct)
+test.df.disco <- test.df.disco %>%
+  select(trt_fct, everything())
+
+```
+
+```{r}
+# Model1: logistic with relaxed lasso
+set.seed(101)
+x = data.matrix(train.df.discov[,-1])
+y = train.df.discov$trt_fct
+relaxed_lasso.disco <- cv.glmnet(x, y, family = "multinomial", type.multinomial = "grouped", relax = TRUE, nfolds = 5)
+newx = data.matrix(test.df.disco[,-1])
+probability_relaxed_lasso.s <- predict(relaxed_lasso.s, newx, s = "lambda.min",
+                                       type = "class")
+mean(probability_relaxed_lasso.disco == test.df.disco$trt_fct) #0.7704348
+
+coefs <- coef(relaxed_lasso.disco, s="lambda.min")
+names(which(coefs$Treatment[,1]!=0))
+# coefs <- coef(relaxed_lasso.disco, s='lambda.min')
+coefs <- as.data.frame(coefs$Treatment[,1])
+names(coefs) <- c('val')
+
+coefs %>%
+  arrange(-abs(val)) %>%
+  print(.,n=25)
+```
+
+```{r}
+set.seed(101)
+
+######Random Forest
+hyper_grid <- expand.grid(
+  mtry       = seq(2, 7, by = 1),
+  node_size  = c(5, 10, 25, 50, 100, 150, 200),
+  sample_size = c(.55, .632, .70, .80),
+  OOB_ERROR   = 0
+)
+
+for(i in 1:nrow(hyper_grid)) {
+  # train model
+  model <- ranger(
+    formula         = trt_fct ~ ., 
+    data            = train.df.discov, 
+    num.trees       = 1000,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$node_size[i],
+    sample.fraction = hyper_grid$sample_size[i],
+    importance = 'impurity',
+    classification = TRUE,
+    seed            = 101
+  )
+  
+  # add OOB error to grid
+  hyper_grid$OOB_ERROR[i] <- sqrt(model$prediction.error)
+}
+
+(oo = hyper_grid %>% 
+    dplyr::arrange(OOB_ERROR) %>%
+    head(10))
+
+rf.fit.final <- ranger(
+  formula         = trt_fct ~., 
+  data            = train.df.discov, 
+  num.trees       = 1000,
+  mtry            = oo[1,]$mtry,
+  min.node.size   = oo[1,]$node_size,
+  sample.fraction = oo[1,]$sample_size,
+  seed            = 101,
+  importance      = 'impurity',
+  classification = TRUE,
+)
+
+rf.predictions = predict(rf.fit.final, data = test.df.disco[,-1])$predictions
+mean(rf.predictions == test.df.disco$trt_fct) #0.9408696
+
+rf.var.imp = importance(rf.fit.final)
+df = data.frame(names(rf.var.imp), unname(rf.var.imp), unname(rf.var.imp)/max(rf.var.imp))
+names(df) = c("variable", "impt", "impt_dist")
+imp.final <- df[order(-df$impt_dist),]
+imp.final <- head(imp.final, 25)
+
+imp.plot <- ggplot(data = imp.final, aes(x = impt_dist, y = variable)) +
+  geom_point(colour="dark green", size=1)
+imp.plot
+```
+
+```{r}
+# boosting tree
+
+y.xgb <- as.numeric(ifelse(y=='Treatment', 0, ifelse(y == 'Spillover', 1, 2)))
+
+# xgb.train = xgb.DMatrix(data=x,label=y.xgb)
+# unique(y.xgb)
+
+hyper_grid_xgb <- expand.grid(
+shrinkage = c(.01, .1), ## controls the learning rate
+interaction.depth = c(1, 2, 4), ## tree depth
+nrounds = c(1000, 5000) ## number of trees
+)
+
+for(i in 1:nrow(hyper_grid_xgb)) {
+# create parameter list
+params <- list(
+eta = hyper_grid_xgb$shrinkage[i],
+max_depth = hyper_grid_xgb$interaction.depth[i]
+)
+
+# reproducibility
+set.seed(101)
+
+# train model
+xgb.model <- xgboost(
+data = x,
+label = y.xgb,
+params = params,
+nrounds = hyper_grid_xgb$nrounds[i],
+objective = "multi:softprob",
+eval_metric = "mlogloss",
+num_class = 3,
+verbose = 0, # silent
+verbosity = 0 # silent
+)
+
+# add min training error and trees to grid
+  hyper_grid_xgb$optimal_trees[i] <- which.min(xgb.model$evaluation_log$train_mlogloss)
+  hyper_grid_xgb$min_loss[i] <- min(xgb.model$evaluation_log$train_mlogloss)
+
+}
+(oo = hyper_grid_xgb %>%
+      dplyr::arrange(min_loss) %>%
+      head(10))
+
+# parameter list
+params <- list(
+  eta = oo[1,]$shrinkage,
+  max_depth = oo[1,]$interaction.depth
+)
+
+# train final model
+xgb.model.final.disco <- xgboost(
+  data = x,
+  label = y.xgb,
+  params = params,
+  nrounds = oo[1,]$optimal_trees,
+  objective = "multi:softprob",
+  eval_metric = "mlogloss",
+  num_class = 3,
+  verbose = 0, # silent
+  verbosity = 0 # silent
+)
+
+phat.xgb.disco <- predict(xgb.model.final.disco, data.matrix(test.df.disco[,-1]), reshape = TRUE)
+# which.max tells you which column is most probable
+# we convert them back to 0-2, assuming column 1 corresponds to 0
+phat.xgb.disco = apply(phat.xgb.disco,1,which.max)-1
+y.test.disco <- as.numeric(ifelse(test.df.disco$trt_fct=='Treatment', 0, ifelse(test.df.disco$trt_fct == 'Spillover', 1, 2)))
+mean(phat.xgb.disco == y.test.disco) #0.9495652
+
+xgb.var.imp = xgb.importance(model = xgb.model.final.disco)
+xgb.plot.importance(importance_matrix = xgb.var.imp)
+```
+
+```{r}
+# SVM
+set.seed(101)
+svm.tuned5 <- train(
+  trt_fct ~.,
+  data = train.df.discov, 
+  method = "svmLinear", 
+  trControl = trainControl(method = "cv", number = 10), 
+  tuneLength = 10)
+
+svm.tuned5$finalModel
+yhat.svm5 <- predict(svm.tuned5, newdata=test.df.disco[,-1])
+# Accuracy on test data
+mean(yhat.svm5 == test.df.disco$trt_fct) #0.8173913
+```
+
+```{r}
+set.seed(101)
+svm.tuned6 <- train(
+  trt_fct ~.,
+  data = train.df.discov, 
+  method = "svmRadial", 
+  trControl = trainControl(method = "cv", number = 10), 
+  tuneLength = 10)
+
+svm.tuned6$finalModel
+yhat.svm6 <- predict(svm.tuned6, newdata=test.df.disco[,-1])
+# Accuracy on test data
+mean(yhat.svm6 == test.df.disco$trt_fct) #0.946087
+```
+
+```{r}
+# NN
+h2o.init(nthreads=4, max_mem_size="8G")
+train.h2o <- as.h2o(train.df.discov)
+splits <- h2o.splitFrame(train.h2o, c(0.8), seed=1)
+# training data
+train.train.h2o  <- h2o.assign(splits[[1]], "train.hex") 
+# validating data
+train.test.h2o  <- h2o.assign(splits[[2]], "valid.hex") 
+# test data
+test.h2o <- as.h2o(test.df.disco)
+predictors = 2:597
+response = 1
+```
+
+```{r}
+if (!file.exists(file.path("NN Models", "dl_grid_random_model_106"))){
+  hyper_params <- list(
+    activation=c("Rectifier","Tanh","RectifierWithDropout","TanhWithDropout"),
+    hidden=list(c(30,30),c(50,50),c(100,100),
+                c(60,60,60),c(100,100,100),
+                c(25,25,25,25),c(64,64,64,64),c(100,100,100,100)),
+    input_dropout_ratio=c(0,0.05),
+    l1=seq(0,1e-4,1e-6),
+    l2=seq(0,1e-4,1e-6),
+    max_w2=c(5,10,15)
+  )
+  
+  ## Stop once the top 5 models are within 1% of each other
+  ## 
+  ##     - the windowed average varies less than 1%
+  ##
+  search_criteria = list(
+    strategy = "RandomDiscrete", 
+    max_runtime_secs = 720, 
+    max_models = 200, 
+    seed=1, 
+    stopping_rounds=5,
+    stopping_tolerance=1e-2
+    )
+  
+  dl_random_grid <- h2o.grid(
+    algorithm="deeplearning",
+    grid_id = "dl_grid_random",
+    training_frame=train.train.h2o,
+    validation_frame=train.test.h2o, 
+    x=predictors, 
+    y=response,
+    epochs=10,
+    distribution = "multinomial",
+    stopping_metric="logloss",
+    stopping_tolerance=1e-2,        ## stop when MSE does not improve by >=1% 
+                                    ## for 2 scoring events
+    stopping_rounds=2,
+    score_duty_cycle=0.025,         ## don't score more than 2.5% of the wall time
+    hyper_params = hyper_params,
+    search_criteria = search_criteria
+  )         
+  grid <- h2o.getGrid("dl_grid_random", sort_by="logloss", decreasing=FALSE)
+  grid
+  grid@summary_table[1,]
+  best_model <- h2o.getModel(grid@model_ids[[1]]) ## model with lowest logloss
+  h2o.saveModel(best_model, path="NN Models")
+  best_model
+}else
+{
+  best_model <- h2o.loadModel(file.path("NN Models", "dl_grid_random_model_106"))
+}
+h2o.performance(best_model, newdata=test.h2o) #0.8870
+```
+
+```{r}
+set.seed(101)
+variable <- Boruta(trt_fct~., data=train.df.discov, doTrace=0)
+variable.final <- TentativeRoughFix(variable)
+confirmed.discov <- variable.final$finalDecision[variable.final$finalDecision %in% c("Confirmed")]
+```
+
+```{r}
+# UMAP
+library(umap)
+set.seed(101)
+umap_fit_5 <- data.matrix(data.discover[,-1]) %>% 
+  umap(n_neighbors = 5,
+       metric = "euclidean",
+       n_epochs = 500)
+  
+umap_fit_5 <- data.discover %>% 
+  # mutate_if(.funs = scale, # we don't want to divide sd (for better plot effect)
+  #           .predicate = is.numeric,
+  #           scale = FALSE) %>%
+  mutate(First_Dimension = umap_fit_5$layout[,1],
+         Second_Dimension = umap_fit_5$layout[,2]) %>% 
+  gather(key = "Variable",
+         value = "Value",
+         c(-First_Dimension, -Second_Dimension, -trt_fct))
+
+ggplot(umap_fit_5, aes(First_Dimension, Second_Dimension, 
+                              col = factor(trt_fct))) + 
+  geom_point(alpha = 0.6) +
+  # scale_color_manual(values=c(amerika_palettes$Republican[1], 
+  #                             amerika_palettes$Democrat[1]),
+  #                    name="Democrat",
+  #                    breaks=c("-0.418325434439179", 
+  #                             "0.581674565560822"),
+  #                    labels=c("No", 
+  #                             "Yes")) +
+  labs(title = " ",
+       subtitle = "Neighborhood size: 5; Epochs = 500",
+       x = "First Dimension",
+       y = "Second Dimension") +
+  theme_minimal()
+
+# epochs = 20 
+set.seed(101)
+umap_fit_e_20 <- data.matrix(data.discover[,-1]) %>% 
+  umap(n_neighbors = 5,
+       metric = "euclidean",
+       n_epochs = 20)
+
+umap_fit_e_20 <- data.discover %>% 
+  # mutate_if(.funs = scale,
+  #           .predicate = is.numeric,
+  #           scale = FALSE) %>% 
+  mutate(First_Dimension = umap_fit_e_20$layout[,1],
+         Second_Dimension = umap_fit_e_20$layout[,2]) %>% 
+  gather(key = "Variable",
+         value = "Value",
+         c(-First_Dimension, -Second_Dimension, -trt_fct))
+
+ggplot(umap_fit_e_20, aes(First_Dimension, Second_Dimension, 
+                                  col = factor(trt_fct))) + 
+  geom_point(alpha = 0.6) +
+  labs(title = " ",
+       subtitle = "Neighborhood size: 5; Epochs = 20",
+       x = "First Dimension",
+       y = "Second Dimension") +
+  theme_minimal()
+```
+
+```{r}
+# SOM
+library(kohonen)
+set.seed(101)
+# create the structure of the output layer
+search_grid <- somgrid(xdim = 10, 
+                       ydim = 10,
+                       topo = "rectangular", # 1 neuron surrounds by 4
+                       neighbourhood.fct = "gaussian") 
+
+# fit
+som_fit <- som(data.matrix(data.discover[,-1]),
+               grid = search_grid,
+               alpha = c(0.1, 0.001), # learning rate
+               radius = 1, # neighbor size, based on Guassian
+               rlen = 1000, # how many times we see the data
+               dist.fcts = "euclidean", 
+               mode = "batch") 
+```
+
+```{r}
+# Mean Distance to Closest Node v.s. Iteration Times
+som_fit$changes %>% 
+  as_tibble() %>% 
+  dplyr::mutate(changes = V1,
+                iteration = seq(1:length(changes))) %>% 
+  ggplot(aes(iteration, changes)) +
+  geom_line() +
+  labs(x = "Training Iteration",
+       y = "Mean Distance to Closest Node") +
+  theme_minimal()
+```
+
+```{r}
+# clustering from SOM via k-means (hard), FCM (soft)
+# for calculating correlations
+point_colors <- c("#d30b0d", "#0033cc", '#6cfa25')
+# (red: PureControl, blue: Spillover, green: Treatment)
+neuron_colors <- c("#428bca", "#d27979", '#FFFFFF')
+
+# plot SOM
+plot(som_fit, 
+     type = "mapping", 
+     pch = 21, 
+     col = point_colors[data.discover$trt_fct], 
+     shape = "straight", main = "SOM Grid")
+```
+
+```{r}
+set.seed(101)
+# k-means
+kmeans_clusters <- som_fit$codes[[1]] %>% 
+  kmeans(., centers = 3)
+
+plot(som_fit, 
+     type = "mapping", 
+     pch = 21, 
+     bg = point_colors[data.discover$trt_fct], 
+     shape = "straight",
+     bgcol = neuron_colors[kmeans_clusters$cluster],
+     main = "3 clusters via k-means");
+add.cluster.boundaries(x = som_fit, 
+                       clustering = kmeans_clusters$cluster, lwd = 5, lty = 5)
+```
+
+```{r}
+set.seed(101)
+# overlapping in kmeans, let's use soft partitioning
+# FCM
+fcm_clusters <- som_fit$codes[[1]] %>% 
+  ppclust::fcm(., centers = 3)
+
+plot(som_fit, 
+     type = "mapping", 
+     pch = 21, 
+     bg = point_colors[data.discover$trt_fct],
+     shape = "straight",
+     bgcol = neuron_colors[fcm_clusters$cluster],
+     main = "3 clusters via FCM");
+add.cluster.boundaries(x = som_fit, 
+                       clustering = fcm_clusters$cluster, lwd = 5, lty = 5)
+```
+
